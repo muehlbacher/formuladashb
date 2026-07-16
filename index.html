@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spa 2025 — F1 Race Replay</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --surface: #171a21;
+    --surface-2: #1e222b;
+    --border: #2a2f3a;
+    --ink: #e8eaf0;
+    --ink-muted: #9aa3b2;
+    --track: #343a47;
+    --track-edge: #232833;
+    --accent: #e10600;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    padding: 14px 20px 10px;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 17px; font-weight: 650; letter-spacing: .01em; }
+  header h1 .flag { margin-right: 8px; }
+  header .session { color: var(--ink-muted); font-size: 13px; }
+  header .spacer { flex: 1; }
+  .stat { display: flex; align-items: baseline; gap: 7px; }
+  .stat .label { color: var(--ink-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+  .stat .value { font-variant-numeric: tabular-nums; font-size: 17px; font-weight: 650; }
+
+  main { flex: 1; display: flex; min-height: 0; padding: 0 20px; gap: 16px; }
+  #trackPanel {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    position: relative;
+    min-width: 0;
+  }
+  #track { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #labelToggle {
+    position: absolute; top: 10px; right: 12px;
+    display: flex; align-items: center; gap: 6px;
+    color: var(--ink-muted); font-size: 12px; user-select: none; cursor: pointer;
+  }
+
+  aside {
+    width: 232px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px 8px;
+    overflow-y: auto;
+  }
+  aside h2 {
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .08em; color: var(--ink-muted);
+    padding: 2px 10px 8px;
+  }
+  .row {
+    display: flex; align-items: center; gap: 9px;
+    padding: 4px 10px; border-radius: 7px;
+    font-variant-numeric: tabular-nums;
+    transition: transform .4s ease;
+  }
+  .row .pos { width: 18px; text-align: right; color: var(--ink-muted); font-size: 12px; }
+  .row .chip { width: 4px; height: 16px; border-radius: 2px; flex: none; }
+  .row .acr { font-weight: 650; width: 40px; letter-spacing: .03em; }
+  .row .name { color: var(--ink-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  .row.out { opacity: .38; }
+  .row.out .name::after { content: " · OUT"; color: var(--ink-muted); }
+  .row.p1 { background: var(--surface-2); }
+
+  footer {
+    display: flex; align-items: center; gap: 14px;
+    padding: 12px 20px 16px;
+  }
+  button#playBtn {
+    width: 44px; height: 44px; border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--surface-2); color: var(--ink);
+    font-size: 16px; cursor: pointer; flex: none;
+  }
+  button#playBtn:hover { background: #262b36; }
+  .speeds { display: flex; gap: 4px; }
+  .speeds button {
+    border: 1px solid var(--border); background: none; color: var(--ink-muted);
+    border-radius: 7px; padding: 5px 9px; font-size: 12px; cursor: pointer;
+    font-variant-numeric: tabular-nums;
+  }
+  .speeds button.active { background: var(--surface-2); color: var(--ink); border-color: #3a4150; }
+  #scrub { flex: 1; accent-color: var(--accent); height: 4px; cursor: pointer; }
+  #loading {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 10px;
+    background: var(--bg); z-index: 10; color: var(--ink-muted);
+  }
+  #loading .err { color: #ff6b60; max-width: 480px; text-align: center; }
+</style>
+</head>
+<body>
+<div id="loading">Loading race data…</div>
+
+<header>
+  <h1><span class="flag">🇧🇪</span>2025 Belgian Grand Prix</h1>
+  <span class="session">Circuit de Spa-Francorchamps · Race</span>
+  <span class="spacer"></span>
+  <div class="stat"><span class="label">Lap</span><span class="value" id="lap">–</span></div>
+  <div class="stat"><span class="label">Race time</span><span class="value" id="clock">00:00</span></div>
+</header>
+
+<main>
+  <div id="trackPanel">
+    <canvas id="track"></canvas>
+    <label id="labelToggle"><input type="checkbox" id="showLabels" checked> labels</label>
+  </div>
+  <aside>
+    <h2>Running order</h2>
+    <div id="board"></div>
+  </aside>
+</main>
+
+<footer>
+  <button id="playBtn" title="Play / pause">▶</button>
+  <div class="speeds" id="speeds"></div>
+  <input type="range" id="scrub" min="0" max="1000" value="0">
+</footer>
+
+<script>
+"use strict";
+
+const SPEEDS = [1, 2, 5, 10, 30, 60];
+let meta, locs;
+let simTime = 0;          // ms since race_start
+let playing = false;
+let speed = 10;
+let lastFrame = null;
+
+const canvas = document.getElementById("track");
+const ctx = canvas.getContext("2d");
+
+async function load() {
+  const el = document.getElementById("loading");
+  try {
+    const [m, l] = await Promise.all([
+      fetch("data/meta.json").then(r => { if (!r.ok) throw new Error("meta.json: " + r.status); return r.json(); }),
+      fetch("data/locations.json").then(r => { if (!r.ok) throw new Error("locations.json: " + r.status); return r.json(); }),
+    ]);
+    meta = m; locs = l;
+    el.remove();
+    init();
+  } catch (e) {
+    el.innerHTML = `<div class="err">Could not load race data (${e.message}).<br>
+      Run <code>python3 fetch_data.py</code> first, then serve this folder over HTTP.</div>`;
+  }
+}
+
+// ---------- geometry ----------
+let bounds, view = { s: 1, ox: 0, oy: 0 };
+let trackPath = null;   // Path2D in world coords, transformed at draw time
+let startFinish = null; // {x, y, nx, ny} world coords + unit normal
+
+function computeBounds() {
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const d of Object.values(locs)) {
+    for (let i = 0; i < d.x.length; i++) {
+      if (d.x[i] < minX) minX = d.x[i];
+      if (d.x[i] > maxX) maxX = d.x[i];
+      if (d.y[i] < minY) minY = d.y[i];
+      if (d.y[i] > maxY) maxY = d.y[i];
+    }
+  }
+  bounds = { minX, maxX, minY, maxY };
+}
+
+// world -> screen (CSS px). Flip y so north stays up.
+function tx(x) { return view.ox + (x - bounds.minX) * view.s; }
+function ty(y) { return view.oy + (bounds.maxY - y) * view.s; }
+
+function fitView() {
+  const w = canvas.clientWidth, h = canvas.clientHeight, pad = 34;
+  const worldW = bounds.maxX - bounds.minX, worldH = bounds.maxY - bounds.minY;
+  view.s = Math.min((w - 2 * pad) / worldW, (h - 2 * pad) / worldH);
+  view.ox = (w - worldW * view.s) / 2;
+  view.oy = (h - worldH * view.s) / 2;
+}
+
+// Build the track outline from a clean reference lap (leader's lap 2).
+function buildTrack() {
+  // Prefer a driver that finished the race; fall back to any with lap data.
+  const candidates = Object.keys(meta.laps)
+    .sort((a, b) => meta.laps[b].length - meta.laps[a].length);
+  for (const num of candidates) {
+    const laps = meta.laps[num];
+    const l2 = laps.find(l => l[0] === 2), l3 = laps.find(l => l[0] === 3);
+    const d = locs[num];
+    if (!l2 || !l3 || !d) continue;
+    const i0 = lowerBound(d.t, l2[1]), i1 = lowerBound(d.t, l3[1]);
+    if (i1 - i0 < 50) continue;
+    const pts = [];
+    for (let i = i0; i < i1; i++) pts.push([d.x[i], d.y[i]]);
+    trackPath = pts;
+    // Start/finish: at the lap boundary point, normal = perpendicular of travel dir
+    const [x0, y0] = pts[0], [x1, y1] = pts[2];
+    const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy) || 1;
+    startFinish = { x: x0, y: y0, nx: -dy / len, ny: dx / len };
+    return;
+  }
+}
+
+// index of first element >= v
+function lowerBound(arr, v) {
+  let lo = 0, hi = arr.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m] < v) lo = m + 1; else hi = m; }
+  return lo;
+}
+
+// interpolated world position of a driver at simTime; null if no data / retired
+const cursor = {}; // per-driver search hint
+function carPos(num) {
+  const d = locs[num];
+  if (!d || d.t.length === 0) return null;
+  const t = simTime;
+  if (t < d.t[0] - 5000 || t > d.t[d.t.length - 1] + 5000) return null;
+  let i = cursor[num] ?? 0;
+  if (i >= d.t.length || d.t[i] > t || (i > 0 && d.t[i - 1] > t)) i = lowerBound(d.t, t);
+  else while (i < d.t.length && d.t[i] < t) i++;
+  cursor[num] = i;
+  if (i === 0) return { x: d.x[0], y: d.y[0] };
+  if (i >= d.t.length) return { x: d.x[d.t.length - 1], y: d.y[d.t.length - 1] };
+  const t0 = d.t[i - 1], t1 = d.t[i];
+  const gap = t1 - t0;
+  if (gap > 8000) return { x: d.x[i - 1], y: d.y[i - 1] }; // red flag / pit box gap: hold
+  const f = (t - t0) / gap;
+  return { x: d.x[i - 1] + (d.x[i] - d.x[i - 1]) * f, y: d.y[i - 1] + (d.y[i] - d.y[i - 1]) * f };
+}
+
+// ---------- race state ----------
+function currentOrder() {
+  // positions: sorted [t, driverNumber, position]
+  const pos = {};
+  for (const [t, num, p] of meta.positions) {
+    if (t > simTime) break;
+    pos[num] = p;
+  }
+  return Object.entries(pos)
+    .map(([num, p]) => ({ num: +num, p }))
+    .sort((a, b) => a.p - b.p);
+}
+
+function leaderLap(order) {
+  // lap of whichever driver runs P1 (fallback: max lap started by anyone)
+  const leader = order.find(o => o.p === 1);
+  const scan = leader ? [String(leader.num)] : Object.keys(meta.laps);
+  let lap = 1;
+  for (const num of scan) {
+    for (const [n, t] of meta.laps[num] || []) {
+      if (t <= simTime && n > lap) lap = n;
+    }
+  }
+  return lap;
+}
+
+function isOut(num) {
+  const d = locs[num];
+  if (!d || !d.t.length) return true;
+  return simTime > d.t[d.t.length - 1] + 30000 && simTime < meta.duration_ms - 1;
+}
+
+// ---------- drawing ----------
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+    canvas.width = w * dpr; canvas.height = h * dpr;
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  fitView();
+}
+
+function draw() {
+  resize();
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  ctx.clearRect(0, 0, w, h);
+
+  // track ribbon
+  if (trackPath) {
+    ctx.beginPath();
+    ctx.moveTo(tx(trackPath[0][0]), ty(trackPath[0][1]));
+    for (let i = 1; i < trackPath.length; i++) ctx.lineTo(tx(trackPath[i][0]), ty(trackPath[i][1]));
+    ctx.closePath();
+    ctx.lineJoin = "round"; ctx.lineCap = "round";
+    ctx.strokeStyle = getCss("--track-edge"); ctx.lineWidth = 16; ctx.stroke();
+    ctx.strokeStyle = getCss("--track"); ctx.lineWidth = 12; ctx.stroke();
+
+    // start/finish line
+    const sf = startFinish, L = 11;
+    ctx.beginPath();
+    ctx.moveTo(tx(sf.x) - sf.nx * L, ty(sf.y) + sf.ny * L);
+    ctx.lineTo(tx(sf.x) + sf.nx * L, ty(sf.y) - sf.ny * L);
+    ctx.strokeStyle = "#dfe3ea"; ctx.lineWidth = 3; ctx.stroke();
+  }
+
+  // cars
+  const showLabels = document.getElementById("showLabels").checked;
+  ctx.font = "600 10px -apple-system, 'Segoe UI', sans-serif";
+  ctx.textBaseline = "middle";
+  for (const d of meta.drivers) {
+    const p = carPos(d.number);
+    if (!p) continue;
+    const x = tx(p.x), y = ty(p.y);
+    ctx.beginPath();
+    ctx.arc(x, y, 5.5, 0, Math.PI * 2);
+    ctx.fillStyle = d.color; ctx.fill();
+    ctx.strokeStyle = "rgba(10,12,16,.85)"; ctx.lineWidth = 2; ctx.stroke();
+    if (showLabels) {
+      ctx.fillStyle = "rgba(232,234,240,.85)";
+      ctx.fillText(d.acronym, x + 8, y);
+    }
+  }
+}
+
+function getCss(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+
+// ---------- leaderboard ----------
+const rowEls = {};
+function buildBoard() {
+  const board = document.getElementById("board");
+  for (const d of meta.drivers) {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.innerHTML = `<span class="pos"></span><span class="chip" style="background:${d.color}"></span>
+      <span class="acr">${d.acronym}</span><span class="name">${d.team}</span>`;
+    board.appendChild(row);
+    rowEls[d.number] = row;
+  }
+}
+
+function updateBoard() {
+  const order = currentOrder();
+  const rank = {};
+  order.forEach(o => rank[o.num] = o.p);
+  const sorted = [...meta.drivers].sort((a, b) =>
+    (rank[a.number] ?? 99) - (rank[b.number] ?? 99) || a.number - b.number);
+  const board = document.getElementById("board");
+  sorted.forEach((d, i) => {
+    const row = rowEls[d.number];
+    row.querySelector(".pos").textContent = rank[d.number] ?? "–";
+    row.classList.toggle("out", isOut(d.number));
+    row.classList.toggle("p1", rank[d.number] === 1);
+    if (board.children[i] !== row) board.insertBefore(row, board.children[i]);
+  });
+  document.getElementById("lap").textContent = `${leaderLap(order)} / ${meta.total_laps}`;
+}
+
+// ---------- playback ----------
+function fmtClock(ms) {
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  const mm = String(m).padStart(2, "0"), ss = String(sec).padStart(2, "0");
+  return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+function frame(now) {
+  if (playing) {
+    if (lastFrame != null) {
+      simTime = Math.min(simTime + (now - lastFrame) * speed, meta.duration_ms);
+      if (simTime >= meta.duration_ms) setPlaying(false);
+    }
+    lastFrame = now;
+  }
+  document.getElementById("clock").textContent = fmtClock(simTime);
+  document.getElementById("scrub").value = Math.round(simTime / meta.duration_ms * 1000);
+  draw();
+  updateBoard();
+  requestAnimationFrame(frame);
+}
+
+function setPlaying(v) {
+  playing = v;
+  lastFrame = null;
+  document.getElementById("playBtn").textContent = v ? "⏸" : "▶";
+}
+
+function init() {
+  computeBounds();
+  buildTrack();
+  buildBoard();
+
+  document.getElementById("playBtn").addEventListener("click", () => {
+    if (!playing && simTime >= meta.duration_ms) simTime = 0;
+    setPlaying(!playing);
+  });
+
+  const speedsEl = document.getElementById("speeds");
+  for (const s of SPEEDS) {
+    const b = document.createElement("button");
+    b.textContent = s + "×";
+    if (s === speed) b.classList.add("active");
+    b.addEventListener("click", () => {
+      speed = s;
+      speedsEl.querySelectorAll("button").forEach(x => x.classList.toggle("active", x === b));
+    });
+    speedsEl.appendChild(b);
+  }
+
+  const scrub = document.getElementById("scrub");
+  scrub.addEventListener("input", () => {
+    simTime = scrub.value / 1000 * meta.duration_ms;
+    lastFrame = null;
+  });
+
+  document.addEventListener("keydown", e => {
+    if (e.code === "Space" && e.target.tagName !== "INPUT") {
+      e.preventDefault();
+      document.getElementById("playBtn").click();
+    }
+  });
+
+  window.addEventListener("resize", draw);
+  requestAnimationFrame(frame);
+}
+
+load();
+</script>
+</body>
+</html>
