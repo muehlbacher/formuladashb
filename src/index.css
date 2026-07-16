@@ -63,7 +63,7 @@ main { flex: 1; display: flex; min-height: 0; padding: 0 20px; gap: 16px; }
 }
 
 aside {
-  width: 232px;
+  width: 268px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -97,6 +97,14 @@ aside h2 {
   text-overflow: ellipsis;
   flex: 1;
 }
+.row .gap {
+  color: var(--ink-muted);
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
+  flex: none;
+}
+.row.p1 .gap { color: var(--ink); }
 .row.out { opacity: 0.38; }
 .row.out .name::after { content: " · OUT"; color: var(--ink-muted); }
 .row.p1 { background: var(--surface-2); }

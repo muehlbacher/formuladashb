@@ -136,6 +136,15 @@ export function leaderLapAt(meta, order, t) {
   return lap;
 }
 
+// Latest known gap to the leader at time t: seconds (number), a string like
+// "+1 LAP", or null (leader / no data yet).
+export function gapAt(meta, num, t) {
+  const d = meta.intervals?.[String(num)];
+  if (!d || !d.t.length || t < d.t[0]) return null;
+  const i = lowerBound(d.t, t + 1) - 1; // last sample <= t
+  return d.g[i];
+}
+
 export function isOut(race, num, t) {
   const d = race.locs[num];
   if (!d || !d.t.length) return true;
