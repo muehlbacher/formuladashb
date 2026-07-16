@@ -1,13 +1,13 @@
 // Data loading, geometry, and race-state logic for the Spa 2025 replay.
 // All times are ms offsets from meta.race_start.
 
-export async function loadRace() {
+export async function loadRace(base = "/data") {
   const [meta, locs] = await Promise.all([
-    fetch("/data/meta.json").then((r) => {
+    fetch(`${base}/meta.json`).then((r) => {
       if (!r.ok) throw new Error("meta.json: " + r.status);
       return r.json();
     }),
-    fetch("/data/locations.json").then((r) => {
+    fetch(`${base}/locations.json`).then((r) => {
       if (!r.ok) throw new Error("locations.json: " + r.status);
       return r.json();
     }),
@@ -33,7 +33,7 @@ export function lowerBound(arr, v) {
   return lo;
 }
 
-function computeBounds(locs) {
+export function computeBounds(locs) {
   let minX = Infinity,
     maxX = -Infinity,
     minY = Infinity,
@@ -50,7 +50,7 @@ function computeBounds(locs) {
 }
 
 // Track outline from a clean reference lap (a finisher's lap 2).
-function buildTrack(meta, locs) {
+export function buildTrack(meta, locs) {
   const candidates = Object.keys(meta.laps).sort(
     (a, b) => meta.laps[b].length - meta.laps[a].length,
   );
@@ -81,12 +81,14 @@ function buildTrack(meta, locs) {
 
 // Interpolated world position of a driver at time t; null if no data.
 // Keeps a per-driver cursor so sequential playback is O(1) per frame.
-function makeCarPositioner(locs) {
+// holdMs: how long past the last sample a car stays at its known spot
+// (live feeds hold longer to ride out polling latency).
+export function makeCarPositioner(locs, holdMs = 5000) {
   const cursor = {};
   return function carPos(num, t) {
     const d = locs[num];
     if (!d || d.t.length === 0) return null;
-    if (t < d.t[0] - 5000 || t > d.t[d.t.length - 1] + 5000) return null;
+    if (t < d.t[0] - holdMs || t > d.t[d.t.length - 1] + holdMs) return null;
     let i = cursor[num] ?? 0;
     if (i >= d.t.length || d.t[i] > t || (i > 0 && d.t[i - 1] > t)) {
       i = lowerBound(d.t, t);

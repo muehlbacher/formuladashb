@@ -52,16 +52,28 @@ the track and are marked OUT in the running order.
 
 ## Architecture
 
+There is **one view per racetrack** (`TrackView`, currently only Spa); the
+sidebar selection picks the **data source** that feeds it — local files for
+the 2025 race replay, the OpenF1 API stream for Live. Both sources expose the
+same interface (`drivers`, `locs` buffers, `bounds`, `track` outline,
+`carPos(num, t)` interpolation), so the canvas and leaderboard don't care
+where the data comes from.
+
 - `fetch_data.py` — one-time downloader/preprocessor (Python stdlib only)
 - `src/engine.js` — data loading, coordinate math, car interpolation, race state
-- `src/App.jsx` — source selection (sidebar) and view switching
-- `src/views/ReplayView.jsx` — replay playback clock (requestAnimationFrame)
-- `src/views/LiveView.jsx` — live polling, incremental track painting, delayed
-  interpolation (`#sim` streams the 2025 Spa race through the same pipeline)
-- `src/components/Sidebar.jsx` — track/session picker
-- `src/components/TrackCanvas.jsx` — canvas track map, drawn imperatively each
-  frame so car motion never goes through React state
-- `src/components/Leaderboard.jsx` — running order + gap to leader (~4×/s)
+- `src/tracks.js` — track configs + sidebar source entries
+- `src/sources/replaySource.js` — local-JSON source (complete race, offset time)
+- `src/sources/liveSource.js` — API polling source (growing buffers, epoch
+  time, ~15 s render delay; `#sim` streams the 2025 Spa race through the same
+  pipeline). Loads the local track outline so the circuit is visible before
+  cars have driven it.
+- `src/views/TrackView.jsx` — the per-racetrack view: RAF loop, header,
+  playback controls (replay) or live status (live)
+- `src/App.jsx` / `src/components/Sidebar.jsx` — source picker
+- `src/components/TrackCanvas.jsx` — canvas layers: outline, driven trail
+  (live), cars — drawn imperatively so car motion never goes through React state
+- `src/components/Leaderboard.jsx` — running order + gap to leader, or plain
+  driver legend in live mode
 - `src/components/Controls.jsx` — play/pause, speed, scrubber
 
 All replay data comes from `api.openf1.org/v1` for `session_key=9939`
