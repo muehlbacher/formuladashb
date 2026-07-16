@@ -219,3 +219,6 @@ __marimo__/
 
 
 data
+
+# Node
+node_modules/

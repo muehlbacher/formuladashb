@@ -3,7 +3,7 @@
 and preprocess it into compact JSON files for the dashboard.
 
 Usage: python3 fetch_data.py
-Output: data/meta.json, data/locations.json
+Output: public/data/meta.json, public/data/locations.json
 """
 
 import json
@@ -19,7 +19,7 @@ SESSION_KEY = 9939  # 2025 Belgian GP, Race
 CHUNK_MINUTES = 10
 THROTTLE_S = 0.5
 DOWNSAMPLE_MS = 450  # keep ~2 samples/second
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "public", "data")
 
 
 def get(path, retries=6):
