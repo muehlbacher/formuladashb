@@ -3,7 +3,7 @@
 and preprocess it into compact JSON files for the dashboard.
 
 Usage: python3 fetch_data.py
-Output: data/meta.json, data/locations.json
+Output: public/data/meta.json, public/data/locations.json
 """
 
 import json
@@ -19,7 +19,7 @@ SESSION_KEY = 9939  # 2025 Belgian GP, Race
 CHUNK_MINUTES = 10
 THROTTLE_S = 0.5
 DOWNSAMPLE_MS = 450  # keep ~2 samples/second
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "public", "data")
 
 
 def get(path, retries=6):
@@ -45,6 +45,27 @@ def parse_date(s):
 
 def iso_z(dt):
     return dt.astimezone(timezone.utc).isoformat()
+
+
+def fetch_intervals(chunks, offset_ms):
+    """Per-driver gap-to-leader time series: {num: {"t": [...], "g": [...]}}.
+    Gap values are seconds (float), a string like "+1 LAP", or null (leader).
+    """
+    intervals = {}
+    for c0, c1 in chunks:
+        time.sleep(THROTTLE_S)
+        rows = get(
+            f"intervals?session_key={SESSION_KEY}"
+            f"&date>{c0.strftime('%Y-%m-%dT%H:%M:%S')}"
+            f"&date<{c1.strftime('%Y-%m-%dT%H:%M:%S')}"
+        )
+        for r in rows:
+            d = intervals.setdefault(str(r["driver_number"]), {"t": [], "g": []})
+            d["t"].append(offset_ms(parse_date(r["date"])))
+            d["g"].append(r["gap_to_leader"])
+    n = sum(len(d["t"]) for d in intervals.values())
+    print(f"  {n} interval rows for {len(intervals)} drivers")
+    return intervals
 
 
 def main():
@@ -104,6 +125,18 @@ def main():
         for p in pos_raw
     )
 
+    # Time chunks shared by the intervals and location fetches, to stay under
+    # API response limits.
+    chunks = []
+    t = race_start
+    while t < race_end:
+        t2 = min(t + timedelta(minutes=CHUNK_MINUTES), race_end)
+        chunks.append((t, t2))
+        t = t2
+
+    print("Fetching intervals (gap to leader)...")
+    intervals = fetch_intervals(chunks, offset_ms)
+
     total_laps = max(l["lap_number"] for l in laps_raw)
     meta = {
         "session_key": SESSION_KEY,
@@ -114,18 +147,11 @@ def main():
         "drivers": drivers,
         "laps": laps,
         "positions": positions,
+        "intervals": intervals,
     }
     with open(os.path.join(OUT_DIR, "meta.json"), "w") as f:
         json.dump(meta, f, separators=(",", ":"))
     print(f"  wrote data/meta.json ({total_laps} laps)")
-
-    # Per-driver location traces, chunked to stay under API response limits.
-    chunks = []
-    t = race_start
-    while t < race_end:
-        t2 = min(t + timedelta(minutes=CHUNK_MINUTES), race_end)
-        chunks.append((t, t2))
-        t = t2
 
     locations = {}
     for i, d in enumerate(drivers):
