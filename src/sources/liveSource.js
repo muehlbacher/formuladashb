@@ -1,9 +1,16 @@
 import { loadRace, makeCarPositioner } from "../engine.js";
 
+// OpenF1's free tier allows 30 requests/minute PER IP — shared across every
+// open dashboard tab. The cadences below total ~20/min (locations 10 +
+// position/intervals 8 + laps 1 + session check 1); on a 429 the loop backs
+// off for a while before resuming.
 const API = "https://api.openf1.org/v1";
-const POLL_MS = 4000;
+export const POLL_MS = 6000;
 const SESSION_RECHECK_MS = 60000;
 const SEED_WINDOW_MS = 3 * 60e3; // backfill on connect
+const TIMING_POLL_MS = 15000; // position + gap-to-leader cadence
+const LAPS_POLL_MS = 60000; // lap-table refresh cadence
+const BACKOFF_MS = 20000; // pause after hitting the rate limit
 export const LIVE_DELAY_MS = 15000; // render behind real time for smooth motion
 
 // Debug: open /#sim to replay the Spa 2025 race through this live pipeline,
@@ -32,6 +39,10 @@ export function createLiveSource(track) {
     session: null,
     newest: 0, // newest sample epoch ms
     carPos: null,
+    // Timing data kept in the same shape as the replay meta so the view can
+    // reuse orderAt/gapAt/leaderLapAt unchanged — times are epoch ms here.
+    meta: { positions: [], intervals: {}, laps: {}, total_laps: null },
+    raceStartMs: null, // epoch ms of the first lap-1 start (race sessions)
     async start({ onReady, onStatus, onUpdate }) {
       alive = true;
       src.carPos = makeCarPositioner(src.locs, 30000);
@@ -82,7 +93,96 @@ export function createLiveSource(track) {
     onUpdate?.();
   };
 
-  let lastDate = null; // newest sample date string seen (poll cursor)
+  let lastDate = null; // newest location sample date string seen (poll cursor)
+  let posCursor = null; // position feed cursor (null = fetch from session start)
+  let intCursor = null; // intervals feed cursor (null = fetch from session start)
+  let lastTimingAt = 0;
+  let lastLapsAt = 0;
+
+  // Sim mode caps queries at shifted "now" so data arrives poll by poll,
+  // like a real session; live queries have no future data anyway.
+  const simUpper = () =>
+    SIM
+      ? `&date<${encodeURIComponent(
+          new Date(Date.now() - simOffset).toISOString().slice(0, 23),
+        )}`
+      : "";
+
+  const resetBuffers = () => {
+    // Clear in place so carPos keeps working on the same refs.
+    for (const k of Object.keys(src.locs)) delete src.locs[k];
+    for (const k of Object.keys(src.meta.intervals)) delete src.meta.intervals[k];
+    for (const k of Object.keys(src.meta.laps)) delete src.meta.laps[k];
+    src.meta.positions.length = 0;
+    src.raceStartMs = null;
+    src.newest = 0;
+    lastDate = null;
+    posCursor = null;
+    intCursor = null;
+    lastTimingAt = 0;
+    lastLapsAt = 0;
+  };
+
+  // Running order, gaps to the leader, and the lap table. Races publish all
+  // three; practice/qualifying may lack intervals — those queries just come
+  // back empty and the leaderboard shows what exists.
+  async function pollTiming(sessionKey, onUpdate) {
+    const now = Date.now();
+    if (now - lastTimingAt >= TIMING_POLL_MS) {
+      lastTimingAt = now;
+      const posRows = await jget(
+        `position?session_key=${sessionKey}` +
+          (posCursor ? `&date>${encodeURIComponent(posCursor)}` : "") +
+          simUpper(),
+      );
+      for (const r of posRows) {
+        src.meta.positions.push([
+          Date.parse(r.date) + simOffset,
+          r.driver_number,
+          r.position,
+        ]);
+      }
+      if (posRows.length) posCursor = posRows[posRows.length - 1].date.slice(0, 23);
+
+      const intRows = await jget(
+        `intervals?session_key=${sessionKey}` +
+          (intCursor ? `&date>${encodeURIComponent(intCursor)}` : "") +
+          simUpper(),
+      );
+      for (const r of intRows) {
+        const d = (src.meta.intervals[String(r.driver_number)] ??= {
+          t: [],
+          g: [],
+        });
+        const t = Date.parse(r.date) + simOffset;
+        if (d.t.length && t <= d.t[d.t.length - 1]) continue;
+        d.t.push(t);
+        d.g.push(r.gap_to_leader);
+      }
+      if (intRows.length) intCursor = intRows[intRows.length - 1].date.slice(0, 23);
+      if (posRows.length || intRows.length) onUpdate?.();
+    }
+
+    if (now - lastLapsAt >= LAPS_POLL_MS) {
+      lastLapsAt = now;
+      const lapRows = await jget(`laps?session_key=${sessionKey}`);
+      const laps = {};
+      let raceStart = null;
+      for (const l of lapRows) {
+        if (!l.date_start) continue;
+        const t = Date.parse(l.date_start) + simOffset;
+        if (SIM && t > Date.now()) continue;
+        (laps[String(l.driver_number)] ??= []).push([l.lap_number, t]);
+        if (l.lap_number === 1 && (raceStart == null || t < raceStart)) {
+          raceStart = t;
+        }
+      }
+      for (const v of Object.values(laps)) v.sort((a, b) => a[0] - b[0]);
+      src.meta.laps = laps;
+      src.raceStartMs = raceStart;
+      onUpdate?.();
+    }
+  }
 
   async function poll({ onStatus, onUpdate }) {
     onStatus?.("Connecting to OpenF1…");
@@ -105,7 +205,13 @@ export function createLiveSource(track) {
     }
 
     let lastSessionCheck = Date.now();
+    let backoffUntil = 0;
     while (alive) {
+      // Stand back for a while after hitting the shared rate limit.
+      if (Date.now() < backoffUntil) {
+        await sleep(2000);
+        continue;
+      }
       // A new session (e.g. next practice) may have started: switch to it.
       if (Date.now() - lastSessionCheck > SESSION_RECHECK_MS) {
         lastSessionCheck = Date.now();
@@ -113,10 +219,7 @@ export function createLiveSource(track) {
           const s = await latestSession();
           if (s.session_key !== sess.session_key) {
             sess = s;
-            // Clear buffers in place so carPos keeps working on the same refs.
-            for (const k of Object.keys(src.locs)) delete src.locs[k];
-            lastDate = null;
-            src.newest = 0;
+            resetBuffers();
             src.session = s;
             onUpdate?.();
             await loadDrivers(s.session_key, onUpdate);
@@ -132,15 +235,8 @@ export function createLiveSource(track) {
           new Date(Date.now() - SEED_WINDOW_MS - simOffset)
             .toISOString()
             .slice(0, 23);
-        // Sim mode caps the query at shifted "now" so data arrives poll by
-        // poll, like a real session; live queries have no future data anyway.
-        const upper = SIM
-          ? `&date<${encodeURIComponent(
-              new Date(Date.now() - simOffset).toISOString().slice(0, 23),
-            )}`
-          : "";
         const rows = await jget(
-          `location?session_key=${sess.session_key}&date>${encodeURIComponent(since)}${upper}`,
+          `location?session_key=${sess.session_key}&date>${encodeURIComponent(since)}${simUpper()}`,
         );
         if (rows.length) {
           for (const r of rows) {
@@ -169,11 +265,27 @@ export function createLiveSource(track) {
           onStatus?.("Waiting for live data — no cars on track right now.");
         }
       } catch (e) {
-        onStatus?.(`Data fetch failed (${e.message}) — retrying…`);
+        if (String(e.message).includes("429")) {
+          backoffUntil = Date.now() + BACKOFF_MS;
+          onStatus?.("OpenF1 rate limit hit — pausing briefly…");
+        } else {
+          onStatus?.(`Data fetch failed (${e.message}) — retrying…`);
+        }
+      }
+      try {
+        await pollTiming(sess.session_key, onUpdate);
+      } catch (e) {
+        // timing is best-effort; car dots keep working without it
+        if (String(e.message).includes("429")) {
+          backoffUntil = Date.now() + BACKOFF_MS;
+        } else {
+          console.warn("timing fetch failed:", e.message);
+        }
       }
       await sleep(POLL_MS);
     }
   }
 
+  if (import.meta.env.DEV) window.__liveSource = src; // debugging hook
   return src;
 }

@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fmtClock, gapAt, isOut, leaderLapAt, orderAt } from "../engine.js";
 import { createReplaySource } from "../sources/replaySource.js";
-import { createLiveSource, LIVE_DELAY_MS } from "../sources/liveSource.js";
+import { createLiveSource, LIVE_DELAY_MS, POLL_MS } from "../sources/liveSource.js";
 import TrackCanvas from "../components/TrackCanvas.jsx";
 import Leaderboard from "../components/Leaderboard.jsx";
 import Controls from "../components/Controls.jsx";
-
-const POLL_S = 4;
 
 function fmtGap(gap, isLeader) {
   if (isLeader) return "Leader";
@@ -106,10 +104,15 @@ export default function TrackView({ track, kind }) {
   // Quantize the leaderboard's time so it recomputes ~4x/s, not every frame.
   const boardTime = Math.floor(time / 250) * 250;
 
-  const { entries, lap } = useMemo(() => {
-    if (!ready) return { entries: [], lap: null };
-    if (source.kind === "replay") {
-      const meta = source.meta;
+  // Both sources expose meta in the same shape (replay: race offsets, live:
+  // epoch ms), so the running order, gaps, and lap all share one code path.
+  // Before any timing data exists (e.g. live before cars run), the board
+  // degrades to a plain driver legend with the car number in the pos slot.
+  const { entries, lap, hasOrder } = useMemo(() => {
+    if (!ready) return { entries: [], lap: null, hasOrder: false };
+    const meta = source.meta;
+    if (meta?.positions?.length) {
+      const replay = source.kind === "replay";
       const order = orderAt(meta, boardTime);
       const rank = {};
       for (const o of order) rank[o.num] = o.p;
@@ -121,7 +124,7 @@ export default function TrackView({ track, kind }) {
         )
         .map((d) => {
           const pos = rank[d.number];
-          const out = isOut(source, d.number, boardTime);
+          const out = replay && isOut(source, d.number, boardTime);
           return {
             driver: d,
             pos,
@@ -130,12 +133,17 @@ export default function TrackView({ track, kind }) {
             gapText: out ? "" : fmtGap(gapAt(meta, d.number, boardTime), pos === 1),
           };
         });
-      return { entries, lap: leaderLapAt(meta, order, boardTime) };
+      const hasLaps = meta.laps && Object.keys(meta.laps).length > 0;
+      return {
+        entries,
+        lap: hasLaps ? leaderLapAt(meta, order, boardTime) : null,
+        hasOrder: true,
+      };
     }
-    // Live: a plain legend — car number in the position slot.
     return {
       entries: source.drivers.map((d) => ({ driver: d, pos: d.number })),
       lap: null,
+      hasOrder: false,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, source, boardTime, source.drivers]);
@@ -185,12 +193,31 @@ export default function TrackView({ track, kind }) {
         )}
         <span className="spacer" />
         {live ? (
-          <div className="stat">
-            <span className="label">Last data</span>
-            <span className="value">
-              {ago == null ? "—" : ago < 5 ? "now" : `${fmtAgo(ago)} ago`}
-            </span>
-          </div>
+          <>
+            {lap != null && (
+              <div className="stat">
+                <span className="label">Lap</span>
+                <span className="value">
+                  {lap}
+                  {source.meta.total_laps ? ` / ${source.meta.total_laps}` : ""}
+                </span>
+              </div>
+            )}
+            {source.raceStartMs != null && (
+              <div className="stat">
+                <span className="label">Race time</span>
+                <span className="value">
+                  {fmtClock(Math.max(0, time - source.raceStartMs))}
+                </span>
+              </div>
+            )}
+            <div className="stat">
+              <span className="label">Last data</span>
+              <span className="value">
+                {ago == null ? "—" : ago < 5 ? "now" : `${fmtAgo(ago)} ago`}
+              </span>
+            </div>
+          </>
         ) : (
           <>
             <div className="stat">
@@ -216,7 +243,7 @@ export default function TrackView({ track, kind }) {
           }
         />
         <Leaderboard
-          title={live ? "Drivers" : "Running order"}
+          title={hasOrder ? "Running order" : "Drivers"}
           entries={entries}
         />
       </main>
@@ -224,7 +251,7 @@ export default function TrackView({ track, kind }) {
       {live ? (
         <footer>
           <span className="live-note">
-            Polls api.openf1.org every {POLL_S}s · view runs ~
+            Polls api.openf1.org every {POLL_MS / 1000}s · view runs ~
             {LIVE_DELAY_MS / 1000}s behind real time
           </span>
         </footer>
