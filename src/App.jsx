@@ -1,29 +1,20 @@
 import { useState } from "react";
 import Sidebar from "./components/Sidebar.jsx";
-import ReplayView from "./views/ReplayView.jsx";
-import LiveView from "./views/LiveView.jsx";
-
-const SOURCES = [
-  {
-    id: "live",
-    label: "Live",
-    sub: "Latest OpenF1 session",
-    live: true,
-  },
-  {
-    id: "spa2025",
-    label: "2025 Belgian Grand Prix",
-    sub: "Race replay · Spa-Francorchamps",
-  },
-];
+import TrackView from "./views/TrackView.jsx";
+import { SOURCES, TRACKS } from "./tracks.js";
 
 export default function App() {
-  const [source, setSource] = useState("spa2025");
+  const [sourceId, setSourceId] = useState("spa2025");
+  const selected = SOURCES.find((s) => s.id === sourceId);
   return (
     <div className="layout">
-      <Sidebar sources={SOURCES} active={source} onSelect={setSource} />
+      <Sidebar sources={SOURCES} active={sourceId} onSelect={setSourceId} />
       <div className="view">
-        {source === "live" ? <LiveView /> : <ReplayView key={source} />}
+        <TrackView
+          key={selected.id}
+          track={TRACKS[selected.trackId]}
+          kind={selected.kind}
+        />
       </div>
     </div>
   );
